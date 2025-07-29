@@ -1,5 +1,6 @@
 {
-  "name": "todo-unified-api",
+  "name": "tdldot",
+  "description": "ToDo List Data Organize Tool - Unified API for multiple ToDo services",
   "version": "0.1.0",
   "private": true,
   "scripts": {
