@@ -10,12 +10,11 @@ function checkRateLimit(userId: string): boolean {
   const userLimit = rateLimitMap.get(userId);
   
   if (!userLimit || now > userLimit.resetTime) {
-    // リセット時間を1分後に設定
     rateLimitMap.set(userId, { count: 1, resetTime: now + 60000 });
     return true;
   }
   
-  if (userLimit.count >= 100) { // 1分間に100リクエスト制限
+  if (userLimit.count >= 100) {
     return false;
   }
   
@@ -26,11 +25,16 @@ function checkRateLimit(userId: string): boolean {
 // GET /api/tasks - 全タスク取得
 export async function GET(request: NextRequest) {
   try {
+    console.log('API called: GET /api/tasks');
+    
     const { searchParams } = new URL(request.url);
     const userId = searchParams.get('user_id');
     const serviceType = searchParams.get('service') || 'todoist';
 
+    console.log('Request params:', { userId, serviceType });
+
     if (!userId) {
+      console.log('Error: user_id is required');
       return NextResponse.json(
         { error: 'user_id is required' },
         { status: 400 }
@@ -39,6 +43,7 @@ export async function GET(request: NextRequest) {
 
     // レート制限チェック
     if (!checkRateLimit(userId)) {
+      console.log('Error: Rate limit exceeded');
       return NextResponse.json(
         { 
           error: 'Rate limit exceeded',
@@ -48,9 +53,12 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // 認証トークン取得（実際の実装では暗号化されたDBから取得）
+    // 認証トークン取得
     const apiToken = request.headers.get('x-todoist-token');
+    console.log('API token present:', !!apiToken);
+    
     if (!apiToken) {
+      console.log('Error: Authentication token required');
       return NextResponse.json(
         { error: 'Authentication token required' },
         { status: 401 }
@@ -61,16 +69,20 @@ export async function GET(request: NextRequest) {
     let adapter;
     switch (serviceType) {
       case 'todoist':
+        console.log('Creating Todoist adapter...');
         adapter = new TodoistAdapter(apiToken);
         break;
       default:
+        console.log('Error: Unsupported service:', serviceType);
         return NextResponse.json(
           { error: `Unsupported service: ${serviceType}` },
           { status: 400 }
         );
     }
 
+    console.log('Fetching tasks...');
     const tasks = await adapter.getTasks();
+    console.log('Tasks fetched:', tasks.length);
 
     return NextResponse.json({
       data: tasks,
@@ -84,15 +96,29 @@ export async function GET(request: NextRequest) {
   } catch (error) {
     console.error('API Error:', error);
     
-    if (error instanceof Error && error.message.includes('API error: 403')) {
-      return NextResponse.json(
-        { error: 'Invalid or expired token' },
-        { status: 403 }
-      );
+    if (error instanceof Error) {
+      console.error('Error message:', error.message);
+      
+      if (error.message.includes('API error: 403') || error.message.includes('Forbidden')) {
+        return NextResponse.json(
+          { error: 'Invalid or expired Todoist token. Please check your API token.' },
+          { status: 403 }
+        );
+      }
+      
+      if (error.message.includes('API error: 401') || error.message.includes('Unauthorized')) {
+        return NextResponse.json(
+          { error: 'Invalid Todoist token. Please check your API token.' },
+          { status: 401 }
+        );
+      }
     }
 
     return NextResponse.json(
-      { error: 'Internal server error' },
+      { 
+        error: 'Internal server error',
+        details: error instanceof Error ? error.message : 'Unknown error'
+      },
       { status: 500 }
     );
   }
@@ -101,8 +127,12 @@ export async function GET(request: NextRequest) {
 // POST /api/tasks - タスク作成
 export async function POST(request: NextRequest) {
   try {
+    console.log('API called: POST /api/tasks');
+    
     const body = await request.json();
     const { user_id, service = 'todoist', ...taskData } = body;
+
+    console.log('Request body:', body);
 
     if (!user_id) {
       return NextResponse.json(
@@ -111,7 +141,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // レート制限チェック
     if (!checkRateLimit(user_id)) {
       return NextResponse.json(
         { 
@@ -122,7 +151,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // バリデーション
     if (!taskData.title) {
       return NextResponse.json(
         { error: 'title is required' },
@@ -163,145 +191,10 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error('API Error:', error);
     return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    );
-  }
-}
-
-// PUT /api/tasks/[id] - タスク更新（別ファイル: src/app/api/tasks/[id]/route.ts）
-export async function PUT(
-  request: NextRequest,
-  { params }: { params: { id: string } }
-) {
-  try {
-    const body = await request.json();
-    const { user_id, service = 'todoist', ...updates } = body;
-    const taskId = params.id;
-
-    if (!user_id) {
-      return NextResponse.json(
-        { error: 'user_id is required' },
-        { status: 400 }
-      );
-    }
-
-    if (!checkRateLimit(user_id)) {
-      return NextResponse.json(
-        { 
-          error: 'Rate limit exceeded',
-          retry_after: 60 
-        },
-        { status: 429 }
-      );
-    }
-
-    const apiToken = request.headers.get('x-todoist-token');
-    if (!apiToken) {
-      return NextResponse.json(
-        { error: 'Authentication token required' },
-        { status: 401 }
-      );
-    }
-
-    // タスクIDから実際のexternal_idを抽出
-    const externalId = taskId.replace('todoist_', '');
-
-    let adapter;
-    switch (service) {
-      case 'todoist':
-        adapter = new TodoistAdapter(apiToken);
-        break;
-      default:
-        return NextResponse.json(
-          { error: `Unsupported service: ${service}` },
-          { status: 400 }
-        );
-    }
-
-    const updatedTask = await adapter.updateTask(externalId, updates);
-
-    return NextResponse.json({
-      data: updatedTask,
-      meta: {
-        service: service,
-        timestamp: new Date().toISOString(),
-      }
-    });
-
-  } catch (error) {
-    console.error('API Error:', error);
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    );
-  }
-}
-
-// DELETE /api/tasks/[id] - タスク削除
-export async function DELETE(
-  request: NextRequest,
-  { params }: { params: { id: string } }
-) {
-  try {
-    const { searchParams } = new URL(request.url);
-    const userId = searchParams.get('user_id');
-    const service = searchParams.get('service') || 'todoist';
-    const taskId = params.id;
-
-    if (!userId) {
-      return NextResponse.json(
-        { error: 'user_id is required' },
-        { status: 400 }
-      );
-    }
-
-    if (!checkRateLimit(userId)) {
-      return NextResponse.json(
-        { 
-          error: 'Rate limit exceeded',
-          retry_after: 60 
-        },
-        { status: 429 }
-      );
-    }
-
-    const apiToken = request.headers.get('x-todoist-token');
-    if (!apiToken) {
-      return NextResponse.json(
-        { error: 'Authentication token required' },
-        { status: 401 }
-      );
-    }
-
-    const externalId = taskId.replace('todoist_', '');
-
-    let adapter;
-    switch (service) {
-      case 'todoist':
-        adapter = new TodoistAdapter(apiToken);
-        break;
-      default:
-        return NextResponse.json(
-          { error: `Unsupported service: ${service}` },
-          { status: 400 }
-        );
-    }
-
-    await adapter.deleteTask(externalId);
-
-    return NextResponse.json({
-      message: 'Task deleted successfully',
-      meta: {
-        service: service,
-        timestamp: new Date().toISOString(),
-      }
-    });
-
-  } catch (error) {
-    console.error('API Error:', error);
-    return NextResponse.json(
-      { error: 'Internal server error' },
+      { 
+        error: 'Internal server error',
+        details: error instanceof Error ? error.message : 'Unknown error'
+      },
       { status: 500 }
     );
   }
