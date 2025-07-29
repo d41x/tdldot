@@ -1,4 +1,5 @@
 // src/lib/adapters/todoist.ts
+
 export interface TodoistTask {
   id: string;
   content: string;
@@ -52,6 +53,8 @@ export class TodoistAdapter {
     });
 
     if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`Todoist API error: ${response.status} ${response.statusText}`, errorText);
       throw new Error(`Todoist API error: ${response.status} ${response.statusText}`);
     }
 
@@ -61,12 +64,18 @@ export class TodoistAdapter {
   // タスク一覧取得
   async getTasks(): Promise<UnifiedTask[]> {
     try {
+      console.log('Fetching tasks from Todoist...');
       const [tasks, projects] = await Promise.all([
         this.request('/tasks'),
         this.request('/projects'),
       ]);
 
-      const projectMap = new Map(projects.map((p: any) => [p.id, p.name]));
+      console.log('Todoist tasks:', tasks);
+      console.log('Todoist projects:', projects);
+
+      const projectMap = new Map<string, string>(
+        projects.map((p: any) => [String(p.id), String(p.name)])
+      );
 
       return tasks.map((task: TodoistTask) => this.transformTask(task, projectMap));
     } catch (error) {
@@ -92,7 +101,9 @@ export class TodoistAdapter {
       });
 
       const projects = await this.request('/projects');
-      const projectMap = new Map(projects.map((p: any) => [p.id, p.name]));
+      const projectMap = new Map<string, string>(
+        projects.map((p: any) => [String(p.id), String(p.name)])
+      );
 
       return this.transformTask(createdTask, projectMap);
     } catch (error) {
@@ -117,13 +128,14 @@ export class TodoistAdapter {
         body: JSON.stringify(todoistUpdates),
       });
 
-      // 更新後のタスクを取得
       const [updatedTask, projects] = await Promise.all([
         this.request(`/tasks/${taskId}`),
         this.request('/projects'),
       ]);
 
-      const projectMap = new Map(projects.map((p: any) => [p.id, p.name]));
+      const projectMap = new Map<string, string>(
+        projects.map((p: any) => [String(p.id), String(p.name)])
+      );
       return this.transformTask(updatedTask, projectMap);
     } catch (error) {
       console.error('Failed to update Todoist task:', error);
@@ -169,10 +181,10 @@ export class TodoistAdapter {
       labels: task.labels,
       project: {
         id: task.project_id,
-        name: projectMap.get(task.project_id) || 'Unknown Project',
+        name: projectMap.get(task.project_id) || 'Inbox',
       },
       created_at: task.created_at,
-      updated_at: task.created_at, // Todoistには更新日時がないため作成日時を使用
+      updated_at: task.created_at,
       completed_at: task.completed_at,
     };
   }
